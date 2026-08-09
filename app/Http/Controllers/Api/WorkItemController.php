@@ -1,0 +1,128 @@
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+use App\Models\AuditEvent;
+use App\Models\Project;
+use App\Models\WorkItem;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+
+class WorkItemController extends Controller
+{
+    private const AGENTS = ['ulthane', 'valkyrie', 'samael', 'raziel', 'morrigan', 'thoth', 'argus'];
+
+    /**
+     * List work items — the polling primitive agents use to find their own pending work.
+     * e.g. GET /api/work-items?assigned_agent=ulthane&status=pending
+     */
+    public function index(Request $request)
+    {
+        $query = WorkItem::with('project:id,name,slug')
+            ->orderBy('created_at');
+
+        if ($request->filled('assigned_agent')) {
+            $query->where('assigned_agent', $request->string('assigned_agent'));
+        }
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->string('status'));
+        }
+
+        if ($request->filled('project')) {
+            $query->whereHas('project', fn ($q) => $q->where('slug', $request->string('project')));
+        }
+
+        return $query->get()->map(fn (WorkItem $item) => $this->present($item));
+    }
+
+    public function show(WorkItem $workItem)
+    {
+        return $this->present($workItem->load('project:id,name,slug'));
+    }
+
+    /**
+     * Create a work item — this is how Valkyrie hands off a task without ever
+     * talking to the target agent directly. The target agent finds it by polling.
+     */
+    public function store(Request $request)
+    {
+        $data = $request->validate([
+            'project' => ['required', 'string', Rule::exists('projects', 'slug')],
+            'title' => ['required', 'string', 'max:255'],
+            'description' => ['required', 'string'],
+            'assigned_agent' => ['required', Rule::in(self::AGENTS)],
+            'created_by' => ['required', 'string', 'max:100'],
+        ]);
+
+        $project = Project::where('slug', $data['project'])->firstOrFail();
+
+        $workItem = $project->workItems()->create([
+            'title' => $data['title'],
+            'description' => $data['description'],
+            'assigned_agent' => $data['assigned_agent'],
+            'created_by' => $data['created_by'],
+            'status' => 'pending',
+        ]);
+
+        AuditEvent::record(
+            $data['created_by'],
+            'work_item.created',
+            $project,
+            "Work item \"{$workItem->title}\" assigned to {$workItem->assigned_agent}.",
+        );
+
+        return response()->json($this->present($workItem->load('project:id,name,slug')), 201);
+    }
+
+    /**
+     * Update status/result — how an agent reports back when it picks up or finishes work.
+     */
+    public function update(Request $request, WorkItem $workItem)
+    {
+        $data = $request->validate([
+            'status' => ['sometimes', Rule::in(['pending', 'in_progress', 'done', 'blocked'])],
+            'result' => ['sometimes', 'nullable', 'string'],
+        ]);
+
+        if (($data['status'] ?? null) === 'in_progress' && $workItem->status !== 'in_progress') {
+            $data['started_at'] = now();
+        }
+
+        if (($data['status'] ?? null) === 'done' && $workItem->status !== 'done') {
+            $data['completed_at'] = now();
+        }
+
+        $workItem->update($data);
+
+        if (isset($data['status'])) {
+            AuditEvent::record(
+                $workItem->assigned_agent,
+                'work_item.status_changed',
+                $workItem->project,
+                "Work item \"{$workItem->title}\" -> {$workItem->status}.",
+                ['work_item_id' => $workItem->id],
+            );
+        }
+
+        return $this->present($workItem->fresh()->load('project:id,name,slug'));
+    }
+
+    private function present(WorkItem $item): array
+    {
+        return [
+            'id' => $item->id,
+            'project' => $item->project->slug,
+            'title' => $item->title,
+            'description' => $item->description,
+            'assigned_agent' => $item->assigned_agent,
+            'status' => $item->status,
+            'created_by' => $item->created_by,
+            'result' => $item->result,
+            'started_at' => $item->started_at?->toIso8601String(),
+            'completed_at' => $item->completed_at?->toIso8601String(),
+            'created_at' => $item->created_at->toIso8601String(),
+        ];
+    }
+}

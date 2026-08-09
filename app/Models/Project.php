@@ -44,4 +44,9 @@ class Project extends Model
     {
         return $this->hasMany(AuditEvent::class);
     }
+
+    public function workItems(): HasMany
+    {
+        return $this->hasMany(WorkItem::class);
+    }
 }
