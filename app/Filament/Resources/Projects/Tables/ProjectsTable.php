@@ -2,19 +2,26 @@
 
 namespace App\Filament\Resources\Projects\Tables;
 
+use App\Models\Organization;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class ProjectsTable
 {
     public static function configure(Table $table): Table
     {
         return $table
-            ->defaultSort('organization.priority_weight')
+            // dot-notation defaultSort() doesn't join relations like column-level
+            // ->sortable() does — it's passed straight to orderBy(), which fails
+            // because `organizations` isn't joined. Use a correlated subquery instead.
+            ->defaultSort(fn (Builder $query) => $query->orderBy(
+                Organization::select('priority_weight')->whereColumn('organizations.id', 'projects.organization_id'),
+            ))
             ->columns([
                 TextColumn::make('organization.name')
                     ->label('Organization')
