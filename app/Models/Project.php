@@ -4,14 +4,20 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['name', 'slug', 'status', 'objective', 'description', 'business_goals'])]
+#[Fillable(['organization_id', 'name', 'slug', 'status', 'objective', 'description', 'business_goals'])]
 class Project extends Model
 {
     public function getRouteKeyName(): string
     {
         return 'slug';
+    }
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class);
     }
 
     public function repositories(): HasMany
