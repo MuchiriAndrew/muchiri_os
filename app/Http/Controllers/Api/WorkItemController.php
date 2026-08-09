@@ -86,8 +86,22 @@ class WorkItemController extends Controller
             'result' => ['sometimes', 'nullable', 'string'],
         ]);
 
-        if (($data['status'] ?? null) === 'in_progress' && $workItem->status !== 'in_progress') {
+        if (($data['status'] ?? null) === 'in_progress') {
             $data['started_at'] = now();
+
+            // Two pollers can race to claim the same pending item; only the first
+            // conditional update wins, everyone else gets a 409.
+            $claimed = WorkItem::where('id', $workItem->id)
+                ->where('status', 'pending')
+                ->update($data);
+
+            if ($claimed === 0) {
+                return response()->json([
+                    'message' => "Work item already claimed (current status: {$workItem->fresh()->status}).",
+                ], 409);
+            }
+
+            return $this->present($workItem->fresh()->load('project:id,name,slug'));
         }
 
         if (($data['status'] ?? null) === 'done' && $workItem->status !== 'done') {

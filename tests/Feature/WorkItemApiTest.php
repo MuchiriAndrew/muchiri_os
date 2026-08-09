@@ -44,4 +44,27 @@ class WorkItemApiTest extends TestCase
         $pollAfter = $this->getJson('/api/work-items?assigned_agent=ulthane&status=pending');
         $pollAfter->assertJsonCount(0);
     }
+
+    public function test_second_claim_of_same_pending_item_is_rejected(): void
+    {
+        $user = User::factory()->create();
+        $org = Organization::create(['name' => 'Test', 'slug' => 'test', 'kind' => 'personal', 'priority_weight' => 1]);
+        Project::create(['organization_id' => $org->id, 'name' => 'Test Project', 'slug' => 'test-project', 'status' => 'active']);
+
+        $this->actingAs($user, 'sanctum');
+
+        $id = $this->postJson('/api/work-items', [
+            'project' => 'test-project',
+            'title' => 'Do the thing',
+            'description' => 'A detailed description of the thing.',
+            'assigned_agent' => 'ulthane',
+            'created_by' => 'valkyrie',
+        ])->json('id');
+
+        $this->patchJson("/api/work-items/{$id}", ['status' => 'in_progress'])
+            ->assertJsonPath('status', 'in_progress');
+
+        $this->patchJson("/api/work-items/{$id}", ['status' => 'in_progress'])
+            ->assertStatus(409);
+    }
 }
