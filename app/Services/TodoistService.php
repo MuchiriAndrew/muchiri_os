@@ -99,15 +99,30 @@ class TodoistService
         return $response->json('id');
     }
 
+    /**
+     * The plain REST `/tasks/{id}/close` action endpoint reliably returns a
+     * 400 (error_code 42) on the current Unified API v1, even with a valid
+     * task id and token -- confirmed by testing directly, not documented
+     * anywhere. Closing only works through the Sync API's command-batch
+     * endpoint, so that's what this uses.
+     */
     public function completeTask(string $taskId): bool
     {
         if (! $this->isConfigured()) {
             return false;
         }
 
-        $response = $this->client()->post(self::BASE_URL."/tasks/{$taskId}/close", []);
+        $response = $this->client()->post(self::BASE_URL.'/sync', [
+            'commands' => [[
+                'type' => 'item_close',
+                'uuid' => (string) Str::uuid(),
+                'args' => ['id' => $taskId],
+            ]],
+        ]);
 
-        if ($response->failed()) {
+        $ok = $response->successful() && collect($response->json('sync_status'))->every(fn ($status) => $status === 'ok');
+
+        if (! $ok) {
             Log::warning('Todoist: failed to close task', [
                 'task_id' => $taskId,
                 'status' => $response->status(),

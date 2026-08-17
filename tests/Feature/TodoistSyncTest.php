@@ -89,13 +89,15 @@ class TodoistSyncTest extends TestCase
         ]);
 
         Http::fake([
-            'api.todoist.com/api/v1/tasks/todoist-task-1/close' => Http::response([], 200),
+            'api.todoist.com/api/v1/sync' => Http::response(['sync_status' => ['*' => 'ok']], 200),
         ]);
 
         $this->patchJson("/api/work-items/{$workItem->id}", ['status' => 'done', 'result' => 'Finished.'])
             ->assertStatus(200);
 
-        Http::assertSent(fn ($request) => $request->url() === 'https://api.todoist.com/api/v1/tasks/todoist-task-1/close');
+        Http::assertSent(fn ($request) => $request->url() === 'https://api.todoist.com/api/v1/sync'
+            && $request['commands'][0]['type'] === 'item_close'
+            && $request['commands'][0]['args']['id'] === 'todoist-task-1');
     }
 
     public function test_marking_blocked_comments_instead_of_closing(): void
