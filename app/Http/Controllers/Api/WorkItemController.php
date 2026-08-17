@@ -6,12 +6,15 @@ use App\Http\Controllers\Controller;
 use App\Models\AuditEvent;
 use App\Models\Project;
 use App\Models\WorkItem;
+use App\Services\TodoistService;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 class WorkItemController extends Controller
 {
     private const AGENTS = ['ulthane', 'valkyrie', 'samael', 'raziel', 'morrigan', 'thoth', 'argus'];
+
+    public function __construct(private readonly TodoistService $todoist) {}
 
     /**
      * List work items — the polling primitive agents use to find their own pending work.
@@ -73,7 +76,11 @@ class WorkItemController extends Controller
             "Work item \"{$workItem->title}\" assigned to {$workItem->assigned_agent}.",
         );
 
-        return response()->json($this->present($workItem->load('project:id,name,slug')), 201);
+        if ($todoistTaskId = $this->todoist->createTask($workItem)) {
+            $workItem->update(['todoist_task_id' => $todoistTaskId]);
+        }
+
+        return response()->json($this->present($workItem->fresh()->load('project:id,name,slug')), 201);
     }
 
     /**
@@ -101,7 +108,10 @@ class WorkItemController extends Controller
                 ], 409);
             }
 
-            return $this->present($workItem->fresh()->load('project:id,name,slug'));
+            $workItem = $workItem->fresh();
+            $this->syncTodoistStatus($workItem);
+
+            return $this->present($workItem->load('project:id,name,slug'));
         }
 
         if (($data['status'] ?? null) === 'done' && $workItem->status !== 'done') {
@@ -118,9 +128,31 @@ class WorkItemController extends Controller
                 "Work item \"{$workItem->title}\" -> {$workItem->status}.",
                 ['work_item_id' => $workItem->id],
             );
+
+            $this->syncTodoistStatus($workItem);
         }
 
         return $this->present($workItem->fresh()->load('project:id,name,slug'));
+    }
+
+    private function syncTodoistStatus(WorkItem $workItem): void
+    {
+        if (! $workItem->todoist_task_id) {
+            return;
+        }
+
+        match ($workItem->status) {
+            'done' => $this->todoist->completeTask($workItem->todoist_task_id),
+            'blocked' => $this->todoist->commentOnTask(
+                $workItem->todoist_task_id,
+                "Blocked: {$workItem->result}",
+            ),
+            'in_progress' => $this->todoist->commentOnTask(
+                $workItem->todoist_task_id,
+                "{$workItem->assigned_agent} started working on this.",
+            ),
+            default => null,
+        };
     }
 
     private function present(WorkItem $item): array
@@ -134,6 +166,7 @@ class WorkItemController extends Controller
             'status' => $item->status,
             'created_by' => $item->created_by,
             'result' => $item->result,
+            'todoist_task_id' => $item->todoist_task_id,
             'started_at' => $item->started_at?->toIso8601String(),
             'completed_at' => $item->completed_at?->toIso8601String(),
             'created_at' => $item->created_at->toIso8601String(),
