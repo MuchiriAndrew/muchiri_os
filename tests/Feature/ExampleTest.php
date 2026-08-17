@@ -31,4 +31,12 @@ class ExampleTest extends TestCase
             $this->actingAs($user)->get($url)->assertStatus(200);
         }
     }
+
+    public function test_unauthenticated_api_request_gets_clean_401_not_a_redirect_crash(): void
+    {
+        // No Accept header, no token -- this is exactly the request shape that
+        // used to crash with a 500 (tried to redirect to a non-existent 'login' route).
+        $this->get('/api/work-items')->assertStatus(401);
+        $this->get('/api/agent-runs')->assertStatus(401);
+    }
 }

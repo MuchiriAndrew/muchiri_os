@@ -16,6 +16,12 @@ return Application::configure(basePath: dirname(__DIR__))
         // Port 8090 is firewalled to only accept connections from the NPM
         // reverse proxy, so trusting its X-Forwarded-* headers is safe.
         $middleware->trustProxies(at: '*');
+
+        // Unauthenticated API requests must get a clean 401, not a redirect to
+        // a 'login' route that doesn't exist (this app uses Filament's own
+        // auth, not a named web login route) -- that mismatch was silently
+        // turning every bad/missing token into a 500.
+        $middleware->redirectGuestsTo(fn (Request $request) => $request->is('api/*') ? null : '/admin/login');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(
