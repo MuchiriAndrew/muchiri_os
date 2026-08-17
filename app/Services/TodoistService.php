@@ -181,6 +181,48 @@ class TodoistService
         return true;
     }
 
+    /**
+     * Lists open (uncompleted) tasks in a project's Todoist project. Returns
+     * an empty array -- never null -- when the organization isn't configured
+     * or the project has no Todoist project yet, so callers can always treat
+     * the result as "nothing to show" rather than an error.
+     */
+    public function listTasks(Project $project): array
+    {
+        $token = $this->tokenFor($project->organization);
+
+        if (! $token || ! $project->todoist_project_id) {
+            return [];
+        }
+
+        $response = $this->client($token)->get(self::BASE_URL.'/tasks', [
+            'project_id' => $project->todoist_project_id,
+        ]);
+
+        if ($response->failed()) {
+            Log::warning('Todoist: failed to list tasks', [
+                'project' => $project->slug,
+                'organization' => $project->organization->slug,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            return [];
+        }
+
+        $this->touchUsed($project->organization);
+
+        return collect($response->json('results', []))
+            ->map(fn (array $task) => [
+                'id' => $task['id'],
+                'content' => $task['content'],
+                'description' => $task['description'] ?? '',
+                'is_completed' => $task['checked'] ?? false,
+                'url' => "https://app.todoist.com/app/task/{$task['id']}",
+            ])
+            ->all();
+    }
+
     private function tokenFor(Organization $organization): ?string
     {
         return Integration::forOrganization($organization, 'todoist')?->credential('token');

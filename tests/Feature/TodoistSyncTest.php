@@ -156,4 +156,54 @@ class TodoistSyncTest extends TestCase
         // The task must NOT have been closed -- blocked stays open.
         Http::assertNotSent(fn ($request) => str_contains($request->url(), '/close'));
     }
+
+    public function test_listing_tasks_returns_empty_when_project_has_no_todoist_project_yet(): void
+    {
+        $user = User::factory()->create();
+        $this->makeProject();
+        $this->actingAs($user, 'sanctum');
+
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+
+        Http::fake(); // no todoist_project_id yet -- must not even call out
+
+        $this->getJson('/api/projects/test-project/todoist-tasks')
+            ->assertStatus(200)
+            ->assertJson([]);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_listing_tasks_returns_the_projects_open_tasks(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $this->actingAs($user, 'sanctum');
+
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        $project->update(['todoist_project_id' => 'todoist-project-1']);
+
+        Http::fake([
+            'api.todoist.com/api/v1/tasks*' => Http::response([
+                'results' => [
+                    ['id' => 'task-1', 'content' => 'Do the thing', 'description' => 'desc', 'checked' => false, 'project_id' => 'todoist-project-1'],
+                ],
+                'next_cursor' => null,
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/projects/test-project/todoist-tasks')->assertStatus(200);
+
+        $response->assertJson([
+            [
+                'id' => 'task-1',
+                'content' => 'Do the thing',
+                'description' => 'desc',
+                'is_completed' => false,
+                'url' => 'https://app.todoist.com/app/task/task-1',
+            ],
+        ]);
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://api.todoist.com/api/v1/tasks?project_id=todoist-project-1');
+    }
 }

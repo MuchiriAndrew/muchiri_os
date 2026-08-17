@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Project;
+use App\Services\TodoistService;
 
 class ProjectController extends Controller
 {
+    public function __construct(private TodoistService $todoist) {}
+
     public function index()
     {
         return Project::select('id', 'name', 'slug', 'status', 'objective')
@@ -58,5 +61,10 @@ class ProjectController extends Controller
                 'body' => $k->body,
             ]),
         ]);
+    }
+
+    public function todoistTasks(Project $project)
+    {
+        return $this->todoist->listTasks($project);
     }
 }
