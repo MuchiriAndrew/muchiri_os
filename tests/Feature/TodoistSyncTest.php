@@ -206,4 +206,86 @@ class TodoistSyncTest extends TestCase
 
         Http::assertSent(fn ($request) => $request->url() === 'https://api.todoist.com/api/v1/tasks?project_id=todoist-project-1');
     }
+
+    public function test_listing_tasks_annotates_each_with_its_assignee_name(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $this->actingAs($user, 'sanctum');
+
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        $project->update(['todoist_project_id' => 'todoist-project-1']);
+
+        Http::fake([
+            'api.todoist.com/api/v1/projects/todoist-project-1/collaborators' => Http::response([
+                'results' => [['id' => 'uid-1', 'name' => 'Andrew Muchiri', 'email' => 'andrew@example.com']],
+            ], 200),
+            'api.todoist.com/api/v1/tasks*' => Http::response([
+                'results' => [
+                    ['id' => 'task-1', 'content' => 'Assigned task', 'description' => '', 'checked' => false, 'responsible_uid' => 'uid-1'],
+                    ['id' => 'task-2', 'content' => 'Unassigned task', 'description' => '', 'checked' => false, 'responsible_uid' => null],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/projects/test-project/todoist-tasks')->assertStatus(200);
+
+        $response->assertJson([
+            ['id' => 'task-1', 'assignee' => 'Andrew Muchiri'],
+            ['id' => 'task-2', 'assignee' => null],
+        ]);
+    }
+
+    public function test_listing_tasks_filters_by_assignee_name_case_insensitively(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $this->actingAs($user, 'sanctum');
+
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        $project->update(['todoist_project_id' => 'todoist-project-1']);
+
+        Http::fake([
+            'api.todoist.com/api/v1/projects/todoist-project-1/collaborators' => Http::response([
+                'results' => [
+                    ['id' => 'uid-1', 'name' => 'Andrew Muchiri', 'email' => 'andrew@example.com'],
+                    ['id' => 'uid-2', 'name' => 'Someone Else', 'email' => 'else@example.com'],
+                ],
+            ], 200),
+            'api.todoist.com/api/v1/tasks*' => Http::response([
+                'results' => [
+                    ['id' => 'task-1', 'content' => 'Mine', 'description' => '', 'checked' => false, 'responsible_uid' => 'uid-1'],
+                    ['id' => 'task-2', 'content' => 'Theirs', 'description' => '', 'checked' => false, 'responsible_uid' => 'uid-2'],
+                ],
+            ], 200),
+        ]);
+
+        $response = $this->getJson('/api/projects/test-project/todoist-tasks?assignee=andrew')->assertStatus(200);
+
+        $response->assertJsonCount(1);
+        $response->assertJson([['id' => 'task-1', 'assignee' => 'Andrew Muchiri']]);
+    }
+
+    public function test_listing_tasks_returns_empty_for_an_unresolvable_assignee_name(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $this->actingAs($user, 'sanctum');
+
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        $project->update(['todoist_project_id' => 'todoist-project-1']);
+
+        Http::fake([
+            'api.todoist.com/api/v1/projects/todoist-project-1/collaborators' => Http::response([
+                'results' => [['id' => 'uid-1', 'name' => 'Andrew Muchiri', 'email' => 'andrew@example.com']],
+            ], 200),
+        ]);
+
+        $this->getJson('/api/projects/test-project/todoist-tasks?assignee=nobody-named-this')
+            ->assertStatus(200)
+            ->assertJson([]);
+
+        // No point fetching tasks if the assignee can't even be resolved.
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), '/tasks?'));
+    }
 }

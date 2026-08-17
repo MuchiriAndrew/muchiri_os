@@ -182,17 +182,38 @@ class TodoistService
     }
 
     /**
-     * Lists open (uncompleted) tasks in a project's Todoist project. Returns
-     * an empty array -- never null -- when the organization isn't configured
-     * or the project has no Todoist project yet, so callers can always treat
-     * the result as "nothing to show" rather than an error.
+     * Lists open (uncompleted) tasks in a project's Todoist project, each
+     * annotated with the assignee's name (or null if unassigned). Pass
+     * $assigneeName to filter to one person -- matched case-insensitively
+     * against their Todoist display name or email, via the project's
+     * collaborator list. An unresolvable name returns an empty array rather
+     * than silently ignoring the filter.
+     *
+     * Returns an empty array -- never null -- when the organization isn't
+     * configured or the project has no Todoist project yet, so callers can
+     * always treat the result as "nothing to show" rather than an error.
      */
-    public function listTasks(Project $project): array
+    public function listTasks(Project $project, ?string $assigneeName = null): array
     {
         $token = $this->tokenFor($project->organization);
 
         if (! $token || ! $project->todoist_project_id) {
             return [];
+        }
+
+        $collaborators = $this->collaboratorsFor($token, $project->todoist_project_id);
+        $namesByUid = $collaborators->pluck('name', 'id');
+
+        $assigneeUid = null;
+
+        if ($assigneeName) {
+            $assigneeUid = $collaborators->first(fn (array $c) => str_contains(strtolower($c['name']), strtolower($assigneeName))
+                || str_contains(strtolower($c['email']), strtolower($assigneeName)),
+            )['id'] ?? null;
+
+            if (! $assigneeUid) {
+                return [];
+            }
         }
 
         $response = $this->client($token)->get(self::BASE_URL.'/tasks', [
@@ -213,14 +234,28 @@ class TodoistService
         $this->touchUsed($project->organization);
 
         return collect($response->json('results', []))
+            ->when($assigneeUid, fn ($tasks) => $tasks->filter(fn (array $task) => ($task['responsible_uid'] ?? null) === $assigneeUid))
             ->map(fn (array $task) => [
                 'id' => $task['id'],
                 'content' => $task['content'],
                 'description' => $task['description'] ?? '',
                 'is_completed' => $task['checked'] ?? false,
+                'assignee' => $namesByUid->get($task['responsible_uid'] ?? null),
                 'url' => "https://app.todoist.com/app/task/{$task['id']}",
             ])
+            ->values()
             ->all();
+    }
+
+    private function collaboratorsFor(string $token, string $todoistProjectId): \Illuminate\Support\Collection
+    {
+        $response = $this->client($token)->get(self::BASE_URL."/projects/{$todoistProjectId}/collaborators");
+
+        if ($response->failed()) {
+            return collect();
+        }
+
+        return collect($response->json('results', []));
     }
 
     private function tokenFor(Organization $organization): ?string

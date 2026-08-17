@@ -63,8 +63,8 @@ class ProjectController extends Controller
         ]);
     }
 
-    public function todoistTasks(Project $project)
+    public function todoistTasks(Project $project, \Illuminate\Http\Request $request)
     {
-        return $this->todoist->listTasks($project);
+        return $this->todoist->listTasks($project, $request->query('assignee'));
     }
 }
