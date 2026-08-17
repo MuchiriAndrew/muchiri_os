@@ -27,7 +27,7 @@ class ExampleTest extends TestCase
         $this->actingAs($user)
             ->get('/admin')->assertStatus(200);
 
-        foreach (['/admin/organizations', '/admin/projects', '/admin/audit-events', '/admin/work-items', '/admin/agent-runs', '/admin/integrations'] as $url) {
+        foreach (['/admin/organizations', '/admin/projects', '/admin/audit-events', '/admin/work-items', '/admin/agent-runs', '/admin/integrations', '/admin/manage-settings'] as $url) {
             $this->actingAs($user)->get($url)->assertStatus(200);
         }
     }
