@@ -16,6 +16,13 @@ class IntegrationForm
             ->components([
                 Section::make()
                     ->schema([
+                        Select::make('organization_id')
+                            ->label('Organization')
+                            ->relationship('organization', 'name')
+                            ->native(false)
+                            ->required()
+                            ->disabledOn('edit')
+                            ->helperText('Credentials are scoped to one organization -- there is no shared fallback, so personal work never accidentally syncs using a work account.'),
                         Select::make('provider')
                             ->options([
                                 'todoist' => 'Todoist',

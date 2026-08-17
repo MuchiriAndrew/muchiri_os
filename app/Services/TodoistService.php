@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Integration;
+use App\Models\Organization;
 use App\Models\Project;
 use App\Models\WorkItem;
 use Illuminate\Http\Client\PendingRequest;
@@ -14,21 +15,19 @@ use Illuminate\Support\Str;
  * Mirrors muchiri_os work items into Todoist as the human-facing task view.
  * muchiri_os stays the source of truth -- every method here is best-effort:
  * a Todoist failure is logged, never thrown, and never blocks the caller.
+ *
+ * Credentials are resolved per-Organization (via the work item's project),
+ * not globally -- a personal work item must never sync using a work Todoist
+ * token just because that's the only one configured. If an organization has
+ * no Todoist integration connected, its work items simply don't sync.
  */
 class TodoistService
 {
     private const BASE_URL = 'https://api.todoist.com/api/v1';
 
-    private ?string $token;
-
-    public function __construct()
+    public function isConfiguredFor(Organization $organization): bool
     {
-        $this->token = Integration::forProvider('todoist')?->credential('token');
-    }
-
-    public function isConfigured(): bool
-    {
-        return filled($this->token);
+        return filled($this->tokenFor($organization));
     }
 
     /**
@@ -41,17 +40,20 @@ class TodoistService
             return $project->todoist_project_id;
         }
 
-        if (! $this->isConfigured()) {
+        $token = $this->tokenFor($project->organization);
+
+        if (! $token) {
             return null;
         }
 
-        $response = $this->client()->post(self::BASE_URL.'/projects', [
+        $response = $this->client($token)->post(self::BASE_URL.'/projects', [
             'name' => $project->name,
         ]);
 
         if ($response->failed()) {
             Log::warning('Todoist: failed to create project', [
                 'project' => $project->slug,
+                'organization' => $project->organization->slug,
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
@@ -61,14 +63,17 @@ class TodoistService
 
         $todoistProjectId = $response->json('id');
         $project->update(['todoist_project_id' => $todoistProjectId]);
-        $this->touchUsed();
+        $this->touchUsed($project->organization);
 
         return $todoistProjectId;
     }
 
     public function createTask(WorkItem $workItem): ?string
     {
-        if (! $this->isConfigured()) {
+        $organization = $workItem->project->organization;
+        $token = $this->tokenFor($organization);
+
+        if (! $token) {
             return null;
         }
 
@@ -78,7 +83,7 @@ class TodoistService
             return null;
         }
 
-        $response = $this->client()->post(self::BASE_URL.'/tasks', [
+        $response = $this->client($token)->post(self::BASE_URL.'/tasks', [
             'content' => $workItem->title,
             'description' => $this->describeFor($workItem),
             'project_id' => $projectId,
@@ -87,6 +92,7 @@ class TodoistService
         if ($response->failed()) {
             Log::warning('Todoist: failed to create task', [
                 'work_item_id' => $workItem->id,
+                'organization' => $organization->slug,
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
@@ -94,7 +100,7 @@ class TodoistService
             return null;
         }
 
-        $this->touchUsed();
+        $this->touchUsed($organization);
 
         return $response->json('id');
     }
@@ -106,17 +112,20 @@ class TodoistService
      * anywhere. Closing only works through the Sync API's command-batch
      * endpoint, so that's what this uses.
      */
-    public function completeTask(string $taskId): bool
+    public function completeTask(WorkItem $workItem): bool
     {
-        if (! $this->isConfigured()) {
+        $organization = $workItem->project->organization;
+        $token = $this->tokenFor($organization);
+
+        if (! $token || ! $workItem->todoist_task_id) {
             return false;
         }
 
-        $response = $this->client()->post(self::BASE_URL.'/sync', [
+        $response = $this->client($token)->post(self::BASE_URL.'/sync', [
             'commands' => [[
                 'type' => 'item_close',
                 'uuid' => (string) Str::uuid(),
-                'args' => ['id' => $taskId],
+                'args' => ['id' => $workItem->todoist_task_id],
             ]],
         ]);
 
@@ -124,7 +133,8 @@ class TodoistService
 
         if (! $ok) {
             Log::warning('Todoist: failed to close task', [
-                'task_id' => $taskId,
+                'task_id' => $workItem->todoist_task_id,
+                'organization' => $organization->slug,
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
@@ -132,7 +142,7 @@ class TodoistService
             return false;
         }
 
-        $this->touchUsed();
+        $this->touchUsed($organization);
 
         return true;
     }
@@ -141,20 +151,24 @@ class TodoistService
      * Todoist has no native "blocked" state, so a blocked work item stays
      * open with a comment explaining why, rather than being closed.
      */
-    public function commentOnTask(string $taskId, string $content): bool
+    public function commentOnTask(WorkItem $workItem, string $content): bool
     {
-        if (! $this->isConfigured()) {
+        $organization = $workItem->project->organization;
+        $token = $this->tokenFor($organization);
+
+        if (! $token || ! $workItem->todoist_task_id) {
             return false;
         }
 
-        $response = $this->client()->post(self::BASE_URL.'/comments', [
-            'task_id' => $taskId,
+        $response = $this->client($token)->post(self::BASE_URL.'/comments', [
+            'task_id' => $workItem->todoist_task_id,
             'content' => $content,
         ]);
 
         if ($response->failed()) {
             Log::warning('Todoist: failed to comment on task', [
-                'task_id' => $taskId,
+                'task_id' => $workItem->todoist_task_id,
+                'organization' => $organization->slug,
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
@@ -162,14 +176,19 @@ class TodoistService
             return false;
         }
 
-        $this->touchUsed();
+        $this->touchUsed($organization);
 
         return true;
     }
 
-    private function client(): PendingRequest
+    private function tokenFor(Organization $organization): ?string
     {
-        return Http::withToken($this->token)->asJson()->timeout(10);
+        return Integration::forOrganization($organization, 'todoist')?->credential('token');
+    }
+
+    private function client(string $token): PendingRequest
+    {
+        return Http::withToken($token)->asJson()->timeout(10);
     }
 
     private function describeFor(WorkItem $workItem): string
@@ -179,8 +198,8 @@ class TodoistService
             ."\nmuchiri_os work item #{$workItem->id}";
     }
 
-    private function touchUsed(): void
+    private function touchUsed(Organization $organization): void
     {
-        Integration::forProvider('todoist')?->touchLastUsed();
+        Integration::forOrganization($organization, 'todoist')?->touchLastUsed();
     }
 }

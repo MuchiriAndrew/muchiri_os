@@ -142,15 +142,9 @@ class WorkItemController extends Controller
         }
 
         match ($workItem->status) {
-            'done' => $this->todoist->completeTask($workItem->todoist_task_id),
-            'blocked' => $this->todoist->commentOnTask(
-                $workItem->todoist_task_id,
-                "Blocked: {$workItem->result}",
-            ),
-            'in_progress' => $this->todoist->commentOnTask(
-                $workItem->todoist_task_id,
-                "{$workItem->assigned_agent} started working on this.",
-            ),
+            'done' => $this->todoist->completeTask($workItem),
+            'blocked' => $this->todoist->commentOnTask($workItem, "Blocked: {$workItem->result}"),
+            'in_progress' => $this->todoist->commentOnTask($workItem, "{$workItem->assigned_agent} started working on this."),
             default => null,
         };
     }

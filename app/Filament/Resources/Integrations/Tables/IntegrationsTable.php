@@ -7,6 +7,7 @@ use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 
 class IntegrationsTable
@@ -15,6 +16,10 @@ class IntegrationsTable
     {
         return $table
             ->columns([
+                TextColumn::make('organization.name')
+                    ->label('Organization')
+                    ->badge()
+                    ->color('gray'),
                 TextColumn::make('provider')
                     ->badge(),
                 TextColumn::make('label')
@@ -31,7 +36,9 @@ class IntegrationsTable
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                //
+                SelectFilter::make('organization_id')
+                    ->relationship('organization', 'name')
+                    ->label('Organization'),
             ])
             ->recordActions([
                 EditAction::make(),

@@ -6,7 +6,6 @@ use App\Models\Integration;
 use App\Models\Organization;
 use App\Models\Project;
 use App\Models\User;
-use App\Models\WorkItem;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -15,11 +14,13 @@ class TodoistSyncTest extends TestCase
 {
     use RefreshDatabase;
 
-    private function makeProject(): Project
-    {
-        $org = Organization::create(['name' => 'Test', 'slug' => 'test', 'kind' => 'personal', 'priority_weight' => 1]);
+    private ?Organization $org = null;
 
-        return Project::create(['organization_id' => $org->id, 'name' => 'Test Project', 'slug' => 'test-project', 'status' => 'active']);
+    private function makeProject(string $orgSlug = 'test-org'): Project
+    {
+        $this->org = Organization::create(['name' => 'Test Org', 'slug' => $orgSlug, 'kind' => 'personal', 'priority_weight' => 1]);
+
+        return Project::create(['organization_id' => $this->org->id, 'name' => 'Test Project', 'slug' => 'test-project', 'status' => 'active']);
     }
 
     public function test_work_item_creation_succeeds_even_without_todoist_configured(): void
@@ -48,7 +49,7 @@ class TodoistSyncTest extends TestCase
         $this->makeProject();
         $this->actingAs($user, 'sanctum');
 
-        Integration::create(['provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
 
         Http::fake([
             'api.todoist.com/api/v1/projects' => Http::response(['id' => 'todoist-project-1'], 200),
@@ -71,13 +72,38 @@ class TodoistSyncTest extends TestCase
         Http::assertSent(fn ($request) => $request->url() === 'https://api.todoist.com/api/v1/tasks' && $request['project_id'] === 'todoist-project-1');
     }
 
+    public function test_work_item_never_syncs_using_a_different_organizations_todoist_token(): void
+    {
+        $user = User::factory()->create();
+        $this->makeProject('org-without-integration');
+        $this->actingAs($user, 'sanctum');
+
+        // A completely different organization has Todoist configured -- this
+        // must never be used for work items belonging to $this->org.
+        $otherOrg = Organization::create(['name' => 'Other Org', 'slug' => 'other-org', 'kind' => 'employer', 'priority_weight' => 1]);
+        Integration::create(['organization_id' => $otherOrg->id, 'provider' => 'todoist', 'credentials' => ['token' => 'other-orgs-token'], 'is_active' => true]);
+
+        Http::fake();
+
+        $response = $this->postJson('/api/work-items', [
+            'project' => 'test-project',
+            'title' => 'Do the thing',
+            'description' => 'A detailed description.',
+            'assigned_agent' => 'ulthane',
+            'created_by' => 'valkyrie',
+        ]);
+
+        $response->assertStatus(201)->assertJsonPath('todoist_task_id', null);
+        Http::assertNothingSent();
+    }
+
     public function test_marking_done_closes_the_todoist_task(): void
     {
         $user = User::factory()->create();
         $project = $this->makeProject();
         $this->actingAs($user, 'sanctum');
 
-        Integration::create(['provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
 
         $workItem = $project->workItems()->create([
             'title' => 'Do the thing',
@@ -106,7 +132,7 @@ class TodoistSyncTest extends TestCase
         $project = $this->makeProject();
         $this->actingAs($user, 'sanctum');
 
-        Integration::create(['provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
+        Integration::create(['organization_id' => $this->org->id, 'provider' => 'todoist', 'credentials' => ['token' => 'fake-token'], 'is_active' => true]);
 
         $workItem = $project->workItems()->create([
             'title' => 'Do the thing',
