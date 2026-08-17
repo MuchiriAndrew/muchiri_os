@@ -1,0 +1,11 @@
+<?php
+
+namespace App\Filament\Resources\AgentRuns\Pages;
+
+use App\Filament\Resources\AgentRuns\AgentRunResource;
+use Filament\Resources\Pages\ListRecords;
+
+class ListAgentRuns extends ListRecords
+{
+    protected static string $resource = AgentRunResource::class;
+}

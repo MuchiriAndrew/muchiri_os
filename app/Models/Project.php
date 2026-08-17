@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['organization_id', 'name', 'slug', 'status', 'objective', 'description', 'business_goals'])]
+#[Fillable(['organization_id', 'name', 'slug', 'status', 'objective', 'description', 'business_goals', 'todoist_project_id'])]
 class Project extends Model
 {
     public function getRouteKeyName(): string
@@ -48,5 +48,10 @@ class Project extends Model
     public function workItems(): HasMany
     {
         return $this->hasMany(WorkItem::class);
+    }
+
+    public function agentRuns(): HasMany
+    {
+        return $this->hasMany(AgentRun::class);
     }
 }

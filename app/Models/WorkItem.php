@@ -5,8 +5,9 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['project_id', 'title', 'description', 'assigned_agent', 'status', 'created_by', 'result', 'started_at', 'completed_at'])]
+#[Fillable(['project_id', 'title', 'description', 'assigned_agent', 'status', 'created_by', 'result', 'started_at', 'completed_at', 'todoist_task_id'])]
 class WorkItem extends Model
 {
     protected function casts(): array
@@ -20,5 +21,10 @@ class WorkItem extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
+    }
+
+    public function agentRuns(): HasMany
+    {
+        return $this->hasMany(AgentRun::class);
     }
 }
