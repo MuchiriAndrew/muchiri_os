@@ -195,13 +195,59 @@ class TodoistService
      */
     public function listTasks(Project $project, ?string $assigneeName = null): array
     {
-        $token = $this->tokenFor($project->organization);
-
-        if (! $token || ! $project->todoist_project_id) {
+        if (! $project->todoist_project_id) {
             return [];
         }
 
-        $collaborators = $this->collaboratorsFor($token, $project->todoist_project_id);
+        return $this->listTasksForProjectId($project->organization, $project->todoist_project_id, $assigneeName, $project->slug);
+    }
+
+    /**
+     * Raw Todoist projects for an organization -- independent of muchiri_os project
+     * records entirely. This is how agents can reach a Todoist project that hasn't
+     * been (or never will be) registered as a muchiri_os project.
+     */
+    public function listProjectsFor(Organization $organization): array
+    {
+        $token = $this->tokenFor($organization);
+
+        if (! $token) {
+            return [];
+        }
+
+        $response = $this->client($token)->get(self::BASE_URL.'/projects');
+
+        if ($response->failed()) {
+            Log::warning('Todoist: failed to list projects', [
+                'organization' => $organization->slug,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            return [];
+        }
+
+        $this->touchUsed($organization);
+
+        return collect($response->json('results', []))
+            ->map(fn (array $p) => ['id' => $p['id'], 'name' => $p['name']])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Tasks for one Todoist project, by raw Todoist project id -- doesn't require
+     * a muchiri_os Project record at all.
+     */
+    public function listTasksForProjectId(Organization $organization, string $todoistProjectId, ?string $assigneeName = null, ?string $label = null): array
+    {
+        $token = $this->tokenFor($organization);
+
+        if (! $token) {
+            return [];
+        }
+
+        $collaborators = $this->collaboratorsFor($token, $todoistProjectId);
         $namesByUid = $collaborators->pluck('name', 'id');
 
         $assigneeUid = null;
@@ -217,13 +263,13 @@ class TodoistService
         }
 
         $response = $this->client($token)->get(self::BASE_URL.'/tasks', [
-            'project_id' => $project->todoist_project_id,
+            'project_id' => $todoistProjectId,
         ]);
 
         if ($response->failed()) {
             Log::warning('Todoist: failed to list tasks', [
-                'project' => $project->slug,
-                'organization' => $project->organization->slug,
+                'project' => $label ?? $todoistProjectId,
+                'organization' => $organization->slug,
                 'status' => $response->status(),
                 'body' => $response->body(),
             ]);
@@ -231,7 +277,7 @@ class TodoistService
             return [];
         }
 
-        $this->touchUsed($project->organization);
+        $this->touchUsed($organization);
 
         return collect($response->json('results', []))
             ->when($assigneeUid, fn ($tasks) => $tasks->filter(fn (array $task) => ($task['responsible_uid'] ?? null) === $assigneeUid))
@@ -241,6 +287,71 @@ class TodoistService
                 'description' => $task['description'] ?? '',
                 'is_completed' => $task['checked'] ?? false,
                 'assignee' => $namesByUid->get($task['responsible_uid'] ?? null),
+                'url' => "https://app.todoist.com/app/task/{$task['id']}",
+            ])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Every open task across an entire organization's Todoist account, not scoped
+     * to any one project -- this is the "what's on my plate" query. Self-assignee
+     * queries (the common case) use Todoist's own filter query, which is one call
+     * and needs no collaborator resolution. A named-other-person query has to fall
+     * back to fetching every task and cross-referencing collaborators per project,
+     * since Todoist has no cross-account "list all collaborators" endpoint.
+     */
+    public function listAllOpenTasksFor(Organization $organization, ?string $assigneeName = null): array
+    {
+        $token = $this->tokenFor($organization);
+
+        if (! $token) {
+            return [];
+        }
+
+        $isSelf = $assigneeName === null || in_array(strtolower(trim($assigneeName)), ['me', 'myself', 'andrew', 'andrew muchiri'], true);
+
+        $projectNames = collect($this->listProjectsFor($organization))->pluck('name', 'id');
+
+        if ($isSelf) {
+            $response = $this->client($token)->get(self::BASE_URL.'/tasks/filter', ['query' => 'assigned to: me']);
+        } else {
+            $response = $this->client($token)->get(self::BASE_URL.'/tasks');
+        }
+
+        if ($response->failed()) {
+            Log::warning('Todoist: failed to list all tasks', [
+                'organization' => $organization->slug,
+                'status' => $response->status(),
+                'body' => $response->body(),
+            ]);
+
+            return [];
+        }
+
+        $this->touchUsed($organization);
+
+        $tasks = collect($response->json('results', []));
+
+        if (! $isSelf) {
+            $namesByUid = collect();
+
+            foreach ($tasks->pluck('project_id')->unique() as $projectId) {
+                $namesByUid = $namesByUid->merge($this->collaboratorsFor($token, $projectId)->pluck('name', 'id'));
+            }
+
+            $assigneeUids = $namesByUid->filter(fn ($name) => str_contains(strtolower($name), strtolower($assigneeName)))->keys();
+
+            $tasks = $tasks->filter(fn (array $task) => $assigneeUids->contains($task['responsible_uid'] ?? null));
+        }
+
+        return $tasks
+            ->map(fn (array $task) => [
+                'id' => $task['id'],
+                'project' => $projectNames->get($task['project_id']),
+                'content' => $task['content'],
+                'description' => $task['description'] ?? '',
+                'is_completed' => $task['checked'] ?? false,
                 'url' => "https://app.todoist.com/app/task/{$task['id']}",
             ])
             ->values()
