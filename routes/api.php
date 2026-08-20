@@ -13,6 +13,7 @@ Route::get('/user', function (Request $request) {
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/projects', [ProjectController::class, 'index']);
+    Route::post('/projects', [ProjectController::class, 'store']);
     Route::get('/projects/{project:slug}/context', [ProjectController::class, 'context']);
     Route::get('/projects/{project:slug}/todoist-tasks', [ProjectController::class, 'todoistTasks']);
 
