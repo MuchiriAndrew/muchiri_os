@@ -144,4 +144,39 @@ class ProjectController extends Controller
     {
         return $this->todoist->listTasks($project, $request->query('assignee'));
     }
+
+    /**
+     * Attach a repository to a project after the fact -- e.g. once Ulthane finishes
+     * scaffolding a brand-new project that was registered without one yet.
+     */
+    public function addRepository(Request $request, Project $project)
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'provider' => ['required', 'string', 'max:50'],
+            'repository' => ['required', 'string', 'max:255'],
+            'role' => ['nullable', 'string', 'max:50'],
+            'local_path' => ['required', 'string', 'max:500'],
+            'default_branch' => ['nullable', 'string', 'max:100'],
+            'created_by' => ['required', 'string', 'max:100'],
+        ]);
+
+        $repo = $project->repositories()->create([
+            'name' => $data['name'],
+            'provider' => $data['provider'],
+            'repository' => $data['repository'],
+            'role' => $data['role'] ?? 'other',
+            'local_path' => $data['local_path'],
+            'default_branch' => $data['default_branch'] ?? 'main',
+        ]);
+
+        AuditEvent::record(
+            $data['created_by'],
+            'project.repository_added',
+            $project,
+            "Repository \"{$repo->repository}\" attached to \"{$project->name}\".",
+        );
+
+        return response()->json($repo->only(['name', 'provider', 'repository', 'role', 'local_path', 'default_branch']), 201);
+    }
 }

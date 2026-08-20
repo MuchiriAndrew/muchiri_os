@@ -87,4 +87,24 @@ class ProjectApiTest extends TestCase
             'created_by' => 'valkyrie',
         ])->assertStatus(422);
     }
+
+    public function test_attaches_a_repository_to_an_existing_project(): void
+    {
+        $user = User::factory()->create();
+        $org = Organization::create(['name' => 'Test', 'slug' => 'test', 'kind' => 'personal', 'priority_weight' => 1]);
+        $project = Project::create(['organization_id' => $org->id, 'name' => 'New Idea', 'slug' => 'new-idea', 'status' => 'active']);
+
+        $this->actingAs($user, 'sanctum');
+
+        $response = $this->postJson('/api/projects/new-idea/repositories', [
+            'name' => 'app',
+            'provider' => 'github',
+            'repository' => 'MuchiriAndrew/new-idea',
+            'local_path' => '~/workprojects/new-idea',
+            'created_by' => 'ulthane',
+        ]);
+
+        $response->assertStatus(201)->assertJsonPath('repository', 'MuchiriAndrew/new-idea');
+        $this->assertDatabaseHas('repositories', ['project_id' => $project->id, 'repository' => 'MuchiriAndrew/new-idea']);
+    }
 }
